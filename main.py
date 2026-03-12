@@ -139,6 +139,29 @@ async def predict(
             content={"success": False, "error": str(e)}
         )
 
+import asyncio
+from contextlib import asynccontextmanager
+
+async def keep_alive():
+    """Ping self every 10 minutes to prevent Render free tier spin-down."""
+    import httpx
+    url = "https://bodym-server.onrender.com/health"
+    while True:
+        await asyncio.sleep(600)  # 10 minutes
+        try:
+            async with httpx.AsyncClient() as client:
+                await client.get(url, timeout=10)
+            print("✓ Keep-alive ping sent")
+        except Exception as e:
+            print(f"Keep-alive failed: {e}")
+
+@asynccontextmanager
+async def lifespan(app):
+    asyncio.create_task(keep_alive())
+    yield
+
+app = FastAPI(title="Body Measurement API", lifespan=lifespan)
+
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8000)
