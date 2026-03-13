@@ -1,14 +1,10 @@
-import io
-import json
+import asyncio
 import numpy as np
 import onnxruntime as ort
 import cv2
 from fastapi import FastAPI, File, UploadFile, Form
 from fastapi.responses import JSONResponse
-import uvicorn
 import os
-
-app = FastAPI(title="Body Measurement API")
 
 # ─── Config ───────────────────────────────────────────────────────────────────
 IMG_SIZE      = 224
@@ -37,20 +33,41 @@ MEASUREMENT_COLS = [
     'shoulder-to-crotch', 'thigh', 'waist', 'wrist'
 ]
 
-# ─── Load model at startup ────────────────────────────────────────────────────
+# ─── Load model ───────────────────────────────────────────────────────────────
 MODEL_PATH = os.path.join(os.path.dirname(__file__), 'models', 'bodym_model.onnx')
 print("Loading measurement model...")
 measurement_session = ort.InferenceSession(MODEL_PATH)
 print("✓ Measurement model loaded")
 
-# ─── Silhouette extraction using GrabCut ─────────────────────────────────────
+# ─── App ──────────────────────────────────────────────────────────────────────
+app = FastAPI(title="Body Measurement API", version="1.0.0")
+
+# ─── Keep-alive task ──────────────────────────────────────────────────────────
+async def keep_alive():
+    import httpx
+    url = "https://bodym-server.onrender.com/health"
+    while True:
+        await asyncio.sleep(600)
+        try:
+            async with httpx.AsyncClient() as client:
+                await client.get(url, timeout=10)
+            print("✓ Keep-alive ping sent")
+        except Exception as e:
+            print(f"Keep-alive failed: {e}")
+
+@app.on_event("startup")
+async def startup_event():
+    asyncio.create_task(keep_alive())
+    print("✓ Keep-alive task started")
+
+# ─── Segmentation ─────────────────────────────────────────────────────────────
 def extract_silhouette(image_bytes: bytes) -> np.ndarray:
     nparr = np.frombuffer(image_bytes, np.uint8)
-    img   = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
-    if img is None:
+    img_cv = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+    if img_cv is None:
         raise ValueError("Could not decode image")
 
-    h, w     = img.shape[:2]
+    h, w     = img_cv.shape[:2]
     mask     = np.zeros((h, w), np.uint8)
     bgdModel = np.zeros((1, 65), np.float64)
     fgdModel = np.zeros((1, 65), np.float64)
@@ -59,7 +76,7 @@ def extract_silhouette(image_bytes: bytes) -> np.ndarray:
     margin_y = int(h * 0.05)
     rect     = (margin_x, margin_y, w - 2 * margin_x, h - 2 * margin_y)
 
-    cv2.grabCut(img, mask, rect, bgdModel, fgdModel, 5, cv2.GC_INIT_WITH_RECT)
+    cv2.grabCut(img_cv, mask, rect, bgdModel, fgdModel, 5, cv2.GC_INIT_WITH_RECT)
 
     fg_mask = np.where(
         (mask == cv2.GC_FGD) | (mask == cv2.GC_PR_FGD), 255, 0
@@ -74,9 +91,9 @@ def extract_silhouette(image_bytes: bytes) -> np.ndarray:
 
 def preprocess_silhouette(silhouette: np.ndarray) -> np.ndarray:
     resized = cv2.resize(silhouette, (IMG_SIZE, IMG_SIZE))
-    img     = resized.astype(np.float32) / 255.0
-    img     = (img - IMAGENET_MEAN) / IMAGENET_STD
-    return img.transpose(2, 0, 1)  # (3, 224, 224)
+    image   = resized.astype(np.float32) / 255.0
+    image   = (image - IMAGENET_MEAN) / IMAGENET_STD
+    return image.transpose(2, 0, 1)  # (3, 224, 224)
 
 
 # ─── Routes ───────────────────────────────────────────────────────────────────
@@ -138,30 +155,3 @@ async def predict(
             status_code=500,
             content={"success": False, "error": str(e)}
         )
-
-import asyncio
-from contextlib import asynccontextmanager
-
-async def keep_alive():
-    """Ping self every 10 minutes to prevent Render free tier spin-down."""
-    import httpx
-    url = "https://bodym-server.onrender.com/health"
-    while True:
-        await asyncio.sleep(600)  # 10 minutes
-        try:
-            async with httpx.AsyncClient() as client:
-                await client.get(url, timeout=10)
-            print("✓ Keep-alive ping sent")
-        except Exception as e:
-            print(f"Keep-alive failed: {e}")
-
-@asynccontextmanager
-async def lifespan(app):
-    asyncio.create_task(keep_alive())
-    yield
-
-app = FastAPI(title="Body Measurement API", lifespan=lifespan)
-
-
-if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=8000)
