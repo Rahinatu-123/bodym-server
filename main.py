@@ -6,7 +6,7 @@ from fastapi import FastAPI, File, UploadFile, Form
 from fastapi.responses import JSONResponse
 import os
 
-# ─── Config ───────────────────────────────────────────────────────────────────
+#  Config 
 IMG_SIZE      = 224
 IMAGENET_MEAN = np.array([0.485, 0.456, 0.406], dtype=np.float32)
 IMAGENET_STD  = np.array([0.229, 0.224, 0.225], dtype=np.float32)
@@ -33,16 +33,16 @@ MEASUREMENT_COLS = [
     'shoulder-to-crotch', 'thigh', 'waist', 'wrist'
 ]
 
-# ─── Load model ───────────────────────────────────────────────────────────────
+#  Load model 
 MODEL_PATH = os.path.join(os.path.dirname(__file__), 'models', 'bodym_model.onnx')
 print("Loading measurement model...")
 measurement_session = ort.InferenceSession(MODEL_PATH)
 print("✓ Measurement model loaded")
 
-# ─── App ──────────────────────────────────────────────────────────────────────
+# App 
 app = FastAPI(title="Body Measurement API", version="1.0.0")
 
-# ─── Keep-alive task ──────────────────────────────────────────────────────────
+# Keep-alive task 
 async def keep_alive():
     import httpx
     url = "https://bodym-server.onrender.com/health"
@@ -60,7 +60,7 @@ async def startup_event():
     asyncio.create_task(keep_alive())
     print("✓ Keep-alive task started")
 
-# ─── Segmentation ─────────────────────────────────────────────────────────────
+#  Segmentation 
 def extract_silhouette(image_bytes: bytes) -> np.ndarray:
     nparr = np.frombuffer(image_bytes, np.uint8)
     img_cv = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
@@ -96,7 +96,7 @@ def preprocess_silhouette(silhouette: np.ndarray) -> np.ndarray:
     return image.transpose(2, 0, 1)  # (3, 224, 224)
 
 
-# ─── Routes ───────────────────────────────────────────────────────────────────
+#  Routes 
 @app.get("/")
 def root():
     return {"status": "ok", "message": "Body Measurement API is running"}
